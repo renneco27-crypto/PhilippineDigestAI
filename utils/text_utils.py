@@ -47,6 +47,7 @@ HARDWORDS_BLOCKLIST: set[str] = {
     "so ordered",         # formulaic closing phrase, not a doctrine
     "docket fee",         # incidental MTC procedural note, not case doctrine
     "via certiorari",     # duplicate of certiorari + not the decided doctrine
+    "slander by deed",    # always superseded by "serious slander by deed"
 }
 
 

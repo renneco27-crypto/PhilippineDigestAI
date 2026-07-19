@@ -227,6 +227,45 @@ CHUNK_DATA_FIELDS: list[str] = [
 ]
 
 
+# ── Statute name corrections ─────────────────────────────────────────────────
+# Maps wrong AI-generated statute strings to their correct RPC/Philippine citations.
+# Applied as a deterministic post-reduce string replacement — no AI involvement.
+# Keys are case-sensitive; apply with str.replace() in order.
+
+STATUTE_CORRECTIONS: dict[str, str] = {
+    # Indeterminate Sentence Law — commonly hallucinated as RA 7360
+    "Republic Act No. 7360":            "Act No. 4103",
+    "Republic Act 7360":                "Act No. 4103",
+    "RA 7360":                          "Act No. 4103",
+    "R.A. 7360":                        "Act No. 4103",
+    "R.A. No. 7360":                    "Act No. 4103",
+    "RA No. 7360":                      "Act No. 4103",
+    # Correct form variants that still need normalizing
+    "Republic Act No. 4103":            "Act No. 4103",
+    "Republic Act 4103":                "Act No. 4103",
+    "RA 4103":                          "Act No. 4103",
+    # Revised Penal Code — sometimes cited as RA 3815 or misspelled
+    "Republic Act No. 3815":            "Act No. 3815 (Revised Penal Code)",
+    "RA 3815":                          "Act No. 3815 (Revised Penal Code)",
+    # Rules of Court
+    "Republic Act No. 7160":            "Republic Act No. 7160",  # correct — no change needed
+}
+
+
+# ── Pipeline metadata patterns ────────────────────────────────────────────────
+# Regex strings used by strip_pipeline_metadata() in p05_stitch.py.
+# These patterns match lines that are pipeline-internal labels, never case text.
+# Compiled once at import time in p05_stitch.py.
+
+PIPELINE_METADATA_PATTERNS: list[str] = [
+    r"^This chunk occurs when",                       # context header prefix
+    r"\(.*?Chunk\s+\d+.*?\)",                         # (Chunk 1 & 2), (Chunk 8)
+    r"\(SC_FALLO_VERBATIM\s*[–\-]\s*Chunk.*?\)",      # (SC_FALLO_VERBATIM – Chunk 8)
+    r"\(Excerpt from.*?Chunk.*?\)",                   # (Excerpt from CA decision – Chunk 1)
+    r"^\s*This establishes",                          # "This establishes..." context lines
+]
+
+
 # ── Bar subjects ─────────────────────────────────────────────────────────────
 # Canonical strings used in the selectbox (ui/app.py) and CLI (run.py).
 # Must match §0.8 of the Source of Truth Registry exactly.

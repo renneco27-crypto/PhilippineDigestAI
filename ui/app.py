@@ -499,6 +499,10 @@ def _build_swarm():
                  max_tokens=config.MAP_MAX_TOKENS, rpm_limit=r)
         for n, u, k, m, r in cfgs
     ]
+    # NVIDIA 70B needs extra time
+    for p in providers:
+        if p.name == "NVIDIA":
+            p.timeout = 35
     return ProviderSwarm(providers)
 
 def run_pipeline(source, is_pdf, subject):

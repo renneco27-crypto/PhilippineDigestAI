@@ -13,6 +13,7 @@ SequenceMatcher is stdlib difflib — no new dependencies.
 
 import json
 import os
+import re
 from difflib import SequenceMatcher
 
 from config import (
@@ -22,12 +23,18 @@ from config import (
     INTERMEDIATE_STREAM_PATH,
     VERBATIM_THRESHOLD,
 )
+from models.constants import PIPELINE_METADATA_PATTERNS
 from models.types import ChunkDataPacket, GlobalContext
 from utils.regex_utils import SOURCE_LINES_START_PATTERN
 from utils.text_utils import filter_hard_words, normalize_legal_terms
 
 # Window size (in lines) used for the sliding verbatim check
 _VERBATIM_SLIDE_WINDOW: int = 8
+
+# Pre-compile pipeline metadata patterns once at import time
+_METADATA_COMPILED: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE) for p in PIPELINE_METADATA_PATTERNS
+]
 
 
 # ── Public functions ──────────────────────────────────────────────────────────
@@ -249,17 +256,89 @@ def build_compiled_stream(
         lines_out.append("")  # blank line between chunks
 
     result = "\n".join(lines_out)
-    return strip_context_headers(result)
+    return strip_pipeline_metadata(result)
 
 
-def strip_context_headers(stream: str) -> str:
-    """Remove pipeline metadata lines from the compiled stream before
-    passing to the reduce stage. These lines begin with 'This chunk
-    occurs when' and are never part of the case text."""
-    return "\n".join(
-        line for line in stream.splitlines()
-        if not line.strip().startswith("This chunk occurs when")
+def strip_pipeline_metadata(stream: str) -> str:
+    """Remove all pipeline metadata lines and inline labels from the
+    compiled stream before passing to the reduce stage.
+
+    Catches:
+      - Lines starting with 'This chunk occurs when'
+      - Lines starting with 'This establishes'
+      - Inline labels like (Chunk 1 & 2), (SC_FALLO_VERBATIM – Chunk 8),
+        (Excerpt from CA decision – Chunk 1)
+
+    Uses PIPELINE_METADATA_PATTERNS from models/constants.py.
+    """
+    cleaned_lines = []
+    for line in stream.splitlines():
+        stripped = line.strip()
+        if any(p.search(stripped) for p in _METADATA_COMPILED):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+
+# Keep old name as alias so any existing callers don't break
+strip_context_headers = strip_pipeline_metadata
+
+
+def verify_usage_examples(
+    digest: str,
+    source_lines: list[str],
+    threshold: float = 0.75,
+) -> list[dict]:
+    """Cross-reference usage examples in Section 2 against the source lines.
+
+    Extracts every line starting with 'Example:' or 'Usage Example:' from
+    the digest, then scores each against the source using SequenceMatcher.
+    Returns a list of dicts for examples below the confidence threshold:
+        {"example": str, "confidence": float, "status": "FABRICATED"|"LOW_CONFIDENCE"}
+
+    Scores:
+        >= threshold  → passes (not flagged)
+        0.4–threshold → LOW_CONFIDENCE
+        < 0.4         → FABRICATED
+    """
+    example_pattern = re.compile(
+        r'(?:Usage\s+)?[Ee]xample:\s*["]?(.+?)["]?\s*$'
     )
+    source_text_lower = " ".join(source_lines).lower()
+    flagged = []
+
+    for line in digest.splitlines():
+        m = example_pattern.search(line)
+        if not m:
+            continue
+        example_text = m.group(1).strip()
+        if not example_text or len(example_text) < 10:
+            continue
+
+        candidate = example_text[:200].lower()
+        best_ratio = 0.0
+
+        # Slide an 8-line window across source to find best match
+        for i in range(len(source_lines)):
+            window = " ".join(source_lines[i: i + _VERBATIM_SLIDE_WINDOW])[:200].lower()
+            try:
+                ratio = SequenceMatcher(None, candidate, window).ratio()
+            except Exception:
+                continue
+            if ratio > best_ratio:
+                best_ratio = ratio
+            if best_ratio >= threshold:
+                break  # early exit — passes
+
+        if best_ratio < threshold:
+            status = "FABRICATED" if best_ratio < 0.4 else "LOW_CONFIDENCE"
+            flagged.append({
+                "example": example_text,
+                "confidence": round(best_ratio, 3),
+                "status": status,
+            })
+
+    return flagged
 
 
 # ── I/O helpers ───────────────────────────────────────────────────────────────

@@ -16,10 +16,12 @@ from __future__ import annotations
 import json
 import re
 
+from models.constants import STATUTE_CORRECTIONS
 from models.types import GlobalContext
+from pipeline.p05_stitch import verify_usage_examples
 from swarm import ProviderSwarm
 from utils.text_utils import normalize_legal_terms
-from models.penalty_tables import classify_penalty_period, describe_period
+from models.penalty_tables import classify_penalty_period, describe_period, get_article_359_facts
 from config import (
     INTERMEDIATE_STREAM_PATH,
     INTERMEDIATE_CONTEXT_PATH,
@@ -191,6 +193,23 @@ def _build_penalty_fact(ca_penalty: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Post-reduce deterministic corrections
+# ---------------------------------------------------------------------------
+
+def apply_statute_corrections(digest: str) -> str:
+    """Replace wrong AI-generated statute names/numbers with correct citations.
+
+    Uses STATUTE_CORRECTIONS from models/constants.py.
+    Applied after the AI call — no AI involvement, pure string replacement.
+    Order matters: longer/more-specific strings are replaced before shorter ones
+    to avoid partial matches (dict preserves insertion order in Python 3.7+).
+    """
+    for wrong, correct in STATUTE_CORRECTIONS.items():
+        digest = digest.replace(wrong, correct)
+    return digest
+
+
+# ---------------------------------------------------------------------------
 # build_reduce_user_content
 # ---------------------------------------------------------------------------
 
@@ -212,6 +231,11 @@ def build_reduce_user_content(
 
     penalty_fact = _build_penalty_fact(global_context.get("ca_penalty", ""))
 
+    # Inject Article 359 specific facts if this case involves slander by deed
+    article_359_fact = ""
+    if "article 359" in compiled_stream.lower() or "slander by deed" in compiled_stream.lower():
+        article_359_fact = get_article_359_facts()
+
     user_content = (
         f"BAR FOCUS: {bar_subject}\n"
         f"Case: {petitioner} v. {respondent}\n"
@@ -224,13 +248,16 @@ def build_reduce_user_content(
         f"\n"
         f"--- END OF STREAM ---\n"
     )
-    if penalty_fact:
+    if penalty_fact or article_359_fact:
         user_content += (
             f"\n"
             f"--- VERIFIED COMPUTED FACTS (use these exactly in ALAC) ---\n"
-            f"{penalty_fact}\n"
-            f"--- END VERIFIED FACTS ---\n"
         )
+        if penalty_fact:
+            user_content += f"{penalty_fact}\n"
+        if article_359_fact:
+            user_content += f"{article_359_fact}\n"
+        user_content += "--- END VERIFIED FACTS ---\n"
     user_content += (
         f"\n"
         f"Now generate the complete Master Case Digest using this exact format:\n"
@@ -267,7 +294,22 @@ def run_reduce(
             "All providers failed at Reduce stage. "
             "Check API keys and provider availability."
         )
-    return normalize_legal_terms(result)
+
+    # Post-reduce deterministic passes (no AI)
+    result = apply_statute_corrections(result)
+    result = normalize_legal_terms(result)
+
+    # Verify usage examples against source — log warnings, don't block
+    source_lines = global_context.get("_source_lines", [])
+    if source_lines:
+        flagged = verify_usage_examples(result, source_lines)
+        for f in flagged:
+            print(
+                f"[VERIFY] {f['status']} usage example "
+                f"(confidence={f['confidence']}): {f['example'][:80]!r}"
+            )
+
+    return result
 
 
 # ---------------------------------------------------------------------------
