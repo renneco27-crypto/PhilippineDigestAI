@@ -26,7 +26,7 @@ class Provider:
     model: str
     max_tokens: int = MAP_MAX_TOKENS
     rpm_limit: int = 20
-    timeout: int = 20
+    timeout: int = 10
     last_request_time: float = field(default_factory=time.time)
     failures: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -67,7 +67,7 @@ class Provider:
             "Authorization": f"Bearer {self.api_key}",
         }
         payload = self._build_payload(system_prompt, user_content, self.max_tokens)
-        max_429_retries = 3
+        max_429_retries = 2
         for attempt in range(max_429_retries):
             try:
                 response = requests.post(

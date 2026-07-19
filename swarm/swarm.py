@@ -27,6 +27,11 @@ class ProviderSwarm:
             self._index += 1
             return self._providers[self._index % len(self._providers)]
 
+    def reset_index(self) -> None:
+        """Reset the round-robin index so the next call starts with provider 0 (ApeKey)."""
+        with self._lock:
+            self._index = -1
+
     def call(
         self,
         system_prompt: str,
@@ -66,7 +71,7 @@ class ProviderSwarm:
         tasks: list[SwarmTask],
         system_prompt: str,
         result_callback: Callable[[int, Optional[str]], None],
-        batch_size: int = 3,
+        batch_size: int = 12,
     ) -> dict[int, Optional[str]]:
         """
         Dispatch all tasks in concurrent batches of batch_size.

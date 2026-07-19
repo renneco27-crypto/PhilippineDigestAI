@@ -27,6 +27,7 @@ from config import (
     INTERMEDIATE_CONTEXT_PATH,
 )
 from models.types import GlobalContext
+from models.constants import LAW_ALIASES
 from utils.text_utils import is_boilerplate_line
 from utils.regex_utils import (
     GR_PATTERN,
@@ -36,6 +37,19 @@ from utils.regex_utils import (
     DIVISION_PATTERN,
     URL_GR_PATTERN,
     FALLO_PATTERN,
+    COMPOUND_ROLE_PATTERN,
+    APPOSITIVE_PATTERN,
+    PEOPLE_PATTERN,
+    CORP_COMMA_PATTERN,
+    NOISE_PATTERN,
+    ROLE_SUFFIX_PATTERN,
+    ET_AL_PATTERN,
+    CONSOLIDATED_GR_PATTERN,
+    PER_CURIAM_PATTERN,
+    RULING_VERB_PATTERN,
+    PARTIAL_QUALIFIER_PATTERN,
+    PROVISION_LAW_PATTERN,
+    STATUTE_PATTERN,
 )
 
 
@@ -115,17 +129,33 @@ def extract_global_context_from_html(soup: BeautifulSoup, url: str) -> GlobalCon
     # Scan only the first 3,000 chars of page text for metadata
     page_text = soup.get_text()[:3000]
 
-    gr_match = GR_PATTERN.search(page_text)
-    if gr_match:
-        context["gr_number"] = gr_match.group(0).strip()
+    # Use the last (most specific) GR match in the header zone.
+    # Lawphil pages put the GR number in the <title> tag AND in the case header;
+    # we want the header occurrence because the case date lives right after it
+    # on the same line (e.g. "G.R. No. 119190 January 16, 1997").
+    gr_matches = list(GR_PATTERN.finditer(page_text))
+    if gr_matches:
+        # Prefer a GR match that has a date within 150 chars (the header line).
+        # Fall back to the first match if none has a co-located date.
+        chosen_gr = gr_matches[0]
+        for gm in gr_matches:
+            window = page_text[gm.start(): gm.start() + 150]
+            if DATE_PATTERN.search(window):
+                chosen_gr = gm
+                break
+        context["gr_number"] = chosen_gr.group(0).strip()
 
-    date_match = DATE_PATTERN.search(page_text)
-    if date_match:
-        context["promulgation_date"] = date_match.group(0).strip()
+        # Date: search only within 150 chars of the chosen GR match to avoid
+        # the Lawphil nav bar "Today is [current date]" false positive.
+        date_window = page_text[chosen_gr.start(): chosen_gr.start() + 150]
+        date_match = DATE_PATTERN.search(date_window)
+        if date_match:
+            context["promulgation_date"] = date_match.group(0).strip()
 
     ponente_match = PONENTE_PATTERN.search(page_text)
     if ponente_match:
-        context["ponente"] = ponente_match.group(1).strip().title()
+        # group(1) includes optional JR./SR. suffix; strip trailing comma artifact
+        context["ponente"] = ponente_match.group(1).strip().rstrip(",").strip().title()
 
     division_match = DIVISION_PATTERN.search(page_text)
     if division_match:
@@ -133,7 +163,10 @@ def extract_global_context_from_html(soup: BeautifulSoup, url: str) -> GlobalCon
 
     vs_match = VS_PATTERN.search(page_text)
     if vs_match:
-        context["petitioner"] = vs_match.group(1).strip()
+        # group(1) may contain nav-bar garbage before the actual name;
+        # the real petitioner name is always the LAST non-empty line.
+        raw_pet_lines = [l.strip() for l in vs_match.group(1).strip().split("\n") if l.strip()]
+        context["petitioner"] = raw_pet_lines[-1] if raw_pet_lines else vs_match.group(1).strip()
         context["respondent"] = vs_match.group(2).strip()[:200].strip()
 
     # Short party names (first part before comma)
@@ -172,6 +205,15 @@ def extract_global_context_from_html(soup: BeautifulSoup, url: str) -> GlobalCon
     if ca_match:
         context["ca_penalty"] = ca_match.group(0).strip()
 
+    # Enrich with extractors (Modules 1-6)
+    rough_lines = [l.strip() for l in full_text.split("\n") if l.strip()]
+    context.update(extract_role_inversion(rough_lines, context))
+    context.update(extract_parties(rough_lines))
+    context.update(extract_consolidated_grs(rough_lines))
+    context.update(extract_per_curiam(rough_lines))
+    context.update(extract_ruling_nuance(rough_lines))
+    context.update(extract_provisions(full_text))
+
     return context
 
 
@@ -199,17 +241,24 @@ def extract_global_context_from_lines(lines: list[str]) -> GlobalContext:
 
     header_text = "\n".join(lines[:50])
 
-    gr_match = GR_PATTERN.search(header_text)
-    if gr_match:
-        context["gr_number"] = gr_match.group(0).strip()
-
-    date_match = DATE_PATTERN.search(header_text)
-    if date_match:
-        context["promulgation_date"] = date_match.group(0).strip()
+    # Use the last (most specific) GR match, preferring one with a co-located date
+    gr_matches = list(GR_PATTERN.finditer(header_text))
+    if gr_matches:
+        chosen_gr = gr_matches[0]
+        for gm in gr_matches:
+            window = header_text[gm.start(): gm.start() + 150]
+            if DATE_PATTERN.search(window):
+                chosen_gr = gm
+                break
+        context["gr_number"] = chosen_gr.group(0).strip()
+        date_window = header_text[chosen_gr.start(): chosen_gr.start() + 150]
+        date_match = DATE_PATTERN.search(date_window)
+        if date_match:
+            context["promulgation_date"] = date_match.group(0).strip()
 
     ponente_match = PONENTE_PATTERN.search(header_text)
     if ponente_match:
-        context["ponente"] = ponente_match.group(1).strip().title()
+        context["ponente"] = ponente_match.group(1).strip().rstrip(",").strip().title()
 
     division_match = DIVISION_PATTERN.search(header_text)
     if division_match:
@@ -217,7 +266,10 @@ def extract_global_context_from_lines(lines: list[str]) -> GlobalContext:
 
     vs_match = VS_PATTERN.search(header_text)
     if vs_match:
-        context["petitioner"] = vs_match.group(1).strip()[-200:].strip()
+        # group(1) may contain nav-bar garbage before the actual name;
+        # the real petitioner name is always the LAST non-empty line.
+        raw_pet_lines = [l.strip() for l in vs_match.group(1).strip().split("\n") if l.strip()]
+        context["petitioner"] = raw_pet_lines[-1] if raw_pet_lines else vs_match.group(1).strip()
         context["respondent"] = vs_match.group(2).strip()[:200].strip()
 
     # Fallback: look for "v." line in first 50 lines
@@ -263,7 +315,269 @@ def extract_global_context_from_lines(lines: list[str]) -> GlobalContext:
     if ca_match:
         context["ca_penalty"] = ca_match.group(0).strip()
 
+    # Enrich with extractors (Modules 1-6)
+    context.update(extract_role_inversion(lines, context))
+    context.update(extract_parties(lines))
+    context.update(extract_consolidated_grs(lines))
+    context.update(extract_per_curiam(lines))
+    context.update(extract_ruling_nuance(lines))
+    context.update(extract_provisions(full_text))
+
     return context
+
+
+# ---------------------------------------------------------------------------
+# Party split helper (Module 2)
+# ---------------------------------------------------------------------------
+
+def _split_parties(side: str) -> list[str]:
+    """Split a party-side string into individual names.
+
+    Protects 'Company, Inc.' style patterns before comma-splitting.
+    Strips noise markers and role suffixes.
+    """
+    if not side:
+        return []
+    # Protect "Company, Inc." style patterns
+    protected = CORP_COMMA_PATTERN.sub(lambda m: m.group(0).replace(",", "\u200b"), side)
+    # Strip noise suffixes
+    stripped = NOISE_PATTERN.sub("", protected)
+    # Split by comma
+    parts = [p.strip() for p in stripped.split(",") if p.strip()]
+    # Restore protected commas
+    parts = [p.replace("\u200b", ",") for p in parts]
+    # Strip role suffixes
+    parts = [ROLE_SUFFIX_PATTERN.sub("", p).strip() for p in parts]
+    return [p for p in parts if len(p) >= 3]
+
+
+# ---------------------------------------------------------------------------
+# Helper: canonical law name from citation text
+# ---------------------------------------------------------------------------
+
+def _canonical_law(cite: str) -> str:
+    """Extract and canonicalize the law name from a citation string."""
+    cite_upper = cite.upper()
+    # Check aliases (shortcuts like "FC", "RPC")
+    for alias in sorted(LAW_ALIASES.keys(), key=len, reverse=True):
+        if alias in cite_upper:
+            return LAW_ALIASES[alias]
+    # Check canonical values directly (e.g. "FAMILY CODE", "CIVIL CODE")
+    for canonical in sorted(set(LAW_ALIASES.values()), key=len, reverse=True):
+        if canonical in cite_upper:
+            return canonical
+    return "Unknown"
+
+
+# ---------------------------------------------------------------------------
+# Module 1 — Role inversion
+# ---------------------------------------------------------------------------
+
+def extract_role_inversion(lines: list[str], context: GlobalContext) -> dict:
+    """
+    Determine trial-court roles of the parties.
+
+    Criminal shortcut: if PEOPLE_PATTERN matches the respondent side,
+    the petitioner is the accused.
+    Otherwise checks for compound roles (accused-appellant) and
+    appositive phrases (petitioner, who was the defendant below).
+    """
+    result: dict = {
+        "petitioner_trial_role": "Unknown",
+        "respondent_trial_role": "Unknown",
+    }
+    if not lines:
+        return result
+
+    full_text = "\n".join(lines)
+    petitioner = (context.get("petitioner") or "").lower()
+    respondent = (context.get("respondent") or "").lower()
+
+    # Criminal shortcut: People v. Accused
+    if PEOPLE_PATTERN.search(respondent):
+        result["petitioner_trial_role"] = "accused"
+        result["respondent_trial_role"] = "state"
+        return result
+
+    # Compound role in petitioner name
+    compound_m = COMPOUND_ROLE_PATTERN.search(petitioner)
+    if compound_m:
+        text = compound_m.group(0).lower()
+        if "defendant" in text:
+            result["petitioner_trial_role"] = "defendant"
+        elif "accused" in text:
+            result["petitioner_trial_role"] = "accused"
+        elif "plaintiff" in text:
+            result["petitioner_trial_role"] = "plaintiff"
+
+    # Appositive phrase in full text
+    app_m = APPOSITIVE_PATTERN.search(full_text)
+    if app_m:
+        ref_name = app_m.group(1).lower()
+        trial_role = app_m.group(2).lower()
+        if ref_name == "petitioner":
+            result["petitioner_trial_role"] = trial_role
+        elif ref_name == "respondent":
+            result["respondent_trial_role"] = trial_role
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Module 2 — Multiple parties
+# ---------------------------------------------------------------------------
+
+def extract_parties(lines: list[str]) -> dict:
+    """
+    Extract full arrays of party names and detect 'et al.' in the caption.
+    """
+    result: dict = {"petitioners": [], "respondents": [], "has_et_al": False}
+    if not lines:
+        return result
+
+    header_text = "\n".join(lines[:50])
+    vs_m = VS_PATTERN.search(header_text)
+    if not vs_m:
+        return result
+
+    petitioner_side = vs_m.group(1).strip()
+    respondent_side = vs_m.group(2).strip()[:200].strip()
+
+    result["has_et_al"] = bool(ET_AL_PATTERN.search(header_text))
+    result["petitioners"] = _split_parties(petitioner_side)
+    result["respondents"] = _split_parties(respondent_side)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Module 3 — Consolidated GR numbers
+# ---------------------------------------------------------------------------
+
+def extract_consolidated_grs(lines: list[str]) -> dict:
+    """
+    Find all GR numbers in the header and detect consolidated cases.
+    """
+    result: dict = {"gr_numbers": [], "is_consolidated": False}
+    if not lines:
+        return result
+
+    header_text = "\n".join(lines[:100])
+
+    cons_m = CONSOLIDATED_GR_PATTERN.search(header_text)
+    if cons_m:
+        matched_text = cons_m.group(0)
+        # Extract all digit sequences from the consolidated GR string
+        digit_matches = re.findall(r'\b(\d+(?:-\d+)?)\b', matched_text)
+        result["gr_numbers"] = ["G.R. No. " + d for d in digit_matches]
+        result["is_consolidated"] = len(digit_matches) > 1
+        return result
+
+    # Fallback: single GR
+    gr_m = GR_PATTERN.search(header_text)
+    if gr_m:
+        result["gr_numbers"] = [gr_m.group(0).strip()]
+        result["is_consolidated"] = False
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Module 4 — Per Curiam
+# ---------------------------------------------------------------------------
+
+def extract_per_curiam(lines: list[str]) -> dict:
+    """Detect whether the decision is per curiam from the header zone."""
+    result: dict = {"is_per_curiam": False}
+    if not lines:
+        return result
+    header_text = "\n".join(lines[:50])
+    result["is_per_curiam"] = bool(PER_CURIAM_PATTERN.search(header_text))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Module 5 — Ruling nuance
+# ---------------------------------------------------------------------------
+
+def extract_ruling_nuance(lines: list[str]) -> dict:
+    """
+    Extract ruling verbs from the dispositive and detect partial affirmance.
+
+    Restricted to the last 15% of lines to avoid the CA ruling quotation trap.
+    """
+    result: dict = {
+        "ruling_keywords": [],
+        "ruling_is_partial": False,
+        "ruling_raw": "",
+    }
+    if not lines:
+        return result
+
+    cutoff = int(len(lines) * 0.85)
+    tail_text = "\n".join(lines[cutoff:])
+
+    fallo_m = FALLO_PATTERN.search(tail_text)
+    if not fallo_m:
+        return result
+
+    fallo_text = fallo_m.group(0)
+    result["ruling_raw"] = fallo_text.strip()
+
+    verbs = RULING_VERB_PATTERN.findall(fallo_text)
+    result["ruling_keywords"] = [v.upper() for v in verbs]
+    result["ruling_is_partial"] = bool(PARTIAL_QUALIFIER_PATTERN.search(fallo_text))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Module 6 — Legal provisions
+# ---------------------------------------------------------------------------
+
+def extract_provisions(text: str) -> dict:
+    """
+    Extract cited legal provisions and collect canonical law names.
+
+    Scans both structured cites (Article X of the Family Code) and
+    statute shortcuts (RA 9165). Merges and deduplicates.
+    """
+    result: dict = {"cited_provisions": [], "canonical_laws": []}
+    if not text:
+        return result
+
+    provisions: list[dict] = []
+
+    # Structured cites
+    for m in PROVISION_LAW_PATTERN.finditer(text):
+        cite = m.group(0).strip()
+        provisions.append({"cite": cite, "source_law": _canonical_law(cite)})
+
+    # Statute shortcuts — e.g. "RA 9165", "Republic Act 9165"
+    for m in STATUTE_PATTERN.finditer(text):
+        ra_num = m.group(1)
+        cite = m.group(0).strip()
+        provisions.append({"cite": cite, "source_law": f"REPUBLIC ACT NO. {ra_num}"})
+
+    # Deduplicate by cite text
+    seen_cites: set[str] = set()
+    unique: list[dict] = []
+    for p in provisions:
+        key = p["cite"].lower()
+        if key not in seen_cites:
+            seen_cites.add(key)
+            unique.append(p)
+
+    # Collect canonical law names
+    laws_seen: set[str] = set()
+    for p in unique:
+        law = p["source_law"]
+        if law not in laws_seen:
+            laws_seen.add(law)
+
+    result["cited_provisions"] = unique
+    result["canonical_laws"] = sorted(laws_seen)
+    return result
 
 
 def save_lines(lines: list[str], path: str = INTERMEDIATE_LINES_PATH) -> None:

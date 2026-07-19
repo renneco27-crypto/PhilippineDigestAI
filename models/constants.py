@@ -280,3 +280,39 @@ BAR_SUBJECTS: list[str] = [
     "Remedial Law",
     "Legal Ethics & Practical Exercises",
 ]
+
+
+# ── Verification severity levels ──────────────────────────────────────────────
+# Enforced via Literal in models/types.py.
+
+SEVERITY_LEVELS: list[str] = ["CRITICAL", "HIGH", "WARNING", "INFO"]
+
+
+# ── Law name aliases for provision normalization ─────────────────────────────
+# Maps common shortcuts to canonical law names.
+
+LAW_ALIASES: dict[str, str] = {
+    "RPC": "REVISED PENAL CODE",
+    "ROC": "RULES OF COURT",
+    "RULES OF CIVIL PROCEDURE": "RULES OF COURT",
+    "FC": "FAMILY CODE",
+    "NCC": "CIVIL CODE",
+    "NEW CIVIL CODE": "CIVIL CODE",
+    "LGC": "LOCAL GOVERNMENT CODE",
+    "CONSTI": "CONSTITUTION",
+    "1987 CONSTITUTION": "CONSTITUTION",
+}
+
+
+# ── Gender markers for trial-role gender extraction ──────────────────────────
+
+GENDER_MARKERS: dict[str, str] = {
+    "husband": "male",
+    "his": "male",
+    "he ": "male",
+    "him": "male",
+    "wife": "female",
+    "her": "female",
+    "she ": "female",
+    "hers": "female",
+}

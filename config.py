@@ -27,7 +27,7 @@ MAP_MAX_TOKENS: int = 800         # Max output tokens per Map AI call
 REDUCE_MAX_TOKENS: int = 6000     # Max output tokens for Reduce AI call
 MAP_TEMPERATURE: float = 0.1
 REDUCE_TEMPERATURE: float = 0.2
-REDUCE_TIMEOUT: int = 60       # Timeout in seconds for the Reduce AI call (map uses default 20s)
+REDUCE_TIMEOUT: int = 40       # Timeout in seconds for the Reduce AI call (6000-token generation needs ~30-60s)
 
 # ── Intermediate & Output File Paths ────────────────────────────────────────
 INTERMEDIATE_DIR: str = "intermediate"
@@ -47,3 +47,7 @@ FETCH_HEADERS: dict = {
 FETCH_TIMEOUT: int = 30
 
 OUTPUT_DIGEST_PATH: str = "output/master_digest.md"
+
+# ── Verification Output Paths ──────────────────────────────────────────────
+INTERMEDIATE_VERIFY_PATH: str = "intermediate/verification.json"
+OUTPUT_VERIFY_REPORT_PATH: str = "output/verification_report.txt"

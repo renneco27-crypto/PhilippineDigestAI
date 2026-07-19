@@ -31,6 +31,7 @@ from config import (
     INTERMEDIATE_PAYLOADS_PATH,
     INTERMEDIATE_PACKETS_PATH,
     INTERMEDIATE_STREAM_PATH,
+    INTERMEDIATE_VERIFY_PATH,
     OUTPUT_DIGEST_PATH,
 )
 from models.types import PipelineState, GlobalContext
@@ -146,12 +147,19 @@ def main() -> None:
             sc_fallo="",
             source_url=args.source if not args.pdf else "",
             bar_subject=args.subject,
+            petitioner_trial_role="", respondent_trial_role="",
+            petitioners=[], respondents=[], has_et_al=False,
+            gr_numbers=[], is_consolidated=False,
+            is_per_curiam=False,
+            ruling_keywords=[], ruling_is_partial=False, ruling_raw="",
+            cited_provisions=[], canonical_laws=[],
         ),
         hits=[],
         payloads=[],
         packets=[],
         compiled_stream="",
         digest="",
+        verification={"passed": True, "flags": [], "summary": "No verification run"},
     )
 
     # -----------------------------------------------------------------------
@@ -289,6 +297,29 @@ def main() -> None:
     except Exception as exc:
         print(f"[STAGE 6 ERROR] {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # -----------------------------------------------------------------------
+    # STAGE 7 — Verify
+    # -----------------------------------------------------------------------
+    _stage_banner(7, "Fact Verification")
+    try:
+        from pipeline.p07_verify import run_verify
+        verification = run_verify(
+            state["digest"],
+            state["global_context"],
+            state["lines"],
+        )
+        state["verification"] = verification
+        _save_json(dict(verification), INTERMEDIATE_VERIFY_PATH)
+
+        if not verification["passed"]:
+            print(f"[VERIFY] FAILED — {len(verification['flags'])} flag(s)")
+            for f in verification["flags"]:
+                print(f"  [{f['severity']}] {f['field']}: {f['note']}")
+        else:
+            print(f"[VERIFY] PASSED — digest is clean")
+    except Exception as exc:
+        print(f"[STAGE 7 ERROR] {exc}", file=sys.stderr)
 
     # -----------------------------------------------------------------------
     # Final summary

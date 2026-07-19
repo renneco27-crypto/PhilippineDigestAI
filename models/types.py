@@ -23,6 +23,25 @@ class GlobalContext(TypedDict):
                                #  criminal case or if none found)
     ca_penalty: str            # Raw CA penalty text extracted from case body
                                # (empty if not found or not a criminal case)
+    # Module 1 — Role inversion
+    petitioner_trial_role: str   # "defendant", "accused", "plaintiff", or "Unknown"
+    respondent_trial_role: str   # "plaintiff", "state", "defendant", or "Unknown"
+    # Module 2 — Multiple parties
+    petitioners: list[str]       # Full array extracted from caption
+    respondents: list[str]       # Full array extracted from caption
+    has_et_al: bool              # True if "et al." in caption
+    # Module 3 — Consolidated cases
+    gr_numbers: list[str]        # All GR numbers (list of 1 for single cases)
+    is_consolidated: bool        # True if len(gr_numbers) > 1
+    # Module 4 — Per Curiam
+    is_per_curiam: bool          # True if "PER CURIAM" in header zone
+    # Module 5 — Partial affirmance
+    ruling_keywords: list[str]   # e.g. ["AFFIRMED", "DENIED"]
+    ruling_is_partial: bool      # True if mixed/qualified ruling
+    ruling_raw: str              # Full dispositive block text
+    # Module 6 — Legal provisions
+    cited_provisions: list[dict]  # [{"cite": "ARTICLE 36", "source_law": "FAMILY CODE"}]
+    canonical_laws: list[str]    # Deduplicated list (not set — JSON serializable)
 
 
 class KeywordHit(TypedDict):
@@ -62,6 +81,18 @@ class SwarmTask(TypedDict):
     content: str               # Full user message string for the AI call
 
 
+class VerificationFlag(TypedDict):
+    field: str               # Which GlobalContext field the flag relates to
+    severity: str            # One of SEVERITY_LEVELS: "CRITICAL"|"HIGH"|"WARNING"|"INFO"
+    note: str                # Human-readable description of the issue
+
+
+class VerificationResult(TypedDict):
+    passed: bool                     # True only if zero CRITICAL or HIGH flags
+    flags: list[VerificationFlag]    # All flags found (may be empty)
+    summary: str                     # One-line human summary
+
+
 class PipelineState(TypedDict):
     """Single state dict passed through run.py to track the entire run."""
     url: str                             # Source URL (empty if PDF run)
@@ -73,3 +104,4 @@ class PipelineState(TypedDict):
     packets: list[ChunkDataPacket]      # AI-returned + locally overridden packets from p04_map
     compiled_stream: str                 # Stitched stream text from p05_stitch
     digest: str                          # Final Master Digest text from p06_reduce
+    verification: VerificationResult     # Verification results from p07_verify

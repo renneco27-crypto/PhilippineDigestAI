@@ -229,6 +229,51 @@ def extract_stated_issues(source_lines: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Roles fact (Module 1)
+# ---------------------------------------------------------------------------
+
+def _build_roles_fact(global_context: GlobalContext) -> str:
+    """Build a verified roles fact string from the context.
+
+    Injects the trial-level roles of petitioner and respondent so the AI
+    correctly identifies who was the defendant/accused at trial.
+    Returns empty string if both roles are Unknown.
+    """
+    p_role = global_context.get("petitioner_trial_role", "Unknown") or "Unknown"
+    r_role = global_context.get("respondent_trial_role", "Unknown") or "Unknown"
+    if p_role == "Unknown" and r_role == "Unknown":
+        return ""
+    petitioner = global_context.get("petitioner", "Petitioner")
+    respondent = global_context.get("respondent", "Respondent")
+    parts: list[str] = []
+    if p_role != "Unknown":
+        parts.append(f"{petitioner} was the {p_role} at trial")
+    if r_role != "Unknown":
+        parts.append(f"{respondent} was the {r_role} at trial")
+    return "VERIFIED ROLE FACT: " + "; ".join(parts) + "."
+
+
+# ---------------------------------------------------------------------------
+# Ruling fact (Module 5)
+# ---------------------------------------------------------------------------
+
+def _build_ruling_fact(global_context: GlobalContext) -> str:
+    """Build a verified ruling fact string from the context.
+
+    Injects the SC's ruling disposition (affirmed, reversed, etc.)
+    and whether it is a partial ruling.
+    Returns empty string if no ruling keywords found.
+    """
+    keywords = global_context.get("ruling_keywords", [])
+    if not keywords:
+        return ""
+    is_partial = global_context.get("ruling_is_partial", False)
+    partial_str = "The ruling is PARTIAL." if is_partial else "The ruling is FINAL."
+    kw_str = ", ".join(keywords)
+    return f"VERIFIED RULING FACT: The Supreme Court {kw_str} the lower court ruling. {partial_str}"
+
+
+# ---------------------------------------------------------------------------
 # Post-reduce deterministic corrections
 # ---------------------------------------------------------------------------
 
@@ -276,6 +321,12 @@ def build_reduce_user_content(
     # Extract stated issues from source
     issues_fact = extract_stated_issues(source_lines or [])
 
+    # Role injection (Module 1)
+    roles_fact = _build_roles_fact(global_context)
+
+    # Ruling injection (Module 5)
+    ruling_fact = _build_ruling_fact(global_context)
+
     user_content = (
         f"BAR FOCUS: {bar_subject}\n"
         f"Case: {petitioner} v. {respondent}\n"
@@ -288,7 +339,7 @@ def build_reduce_user_content(
         f"\n"
         f"--- END OF STREAM ---\n"
     )
-    verified_sections = [penalty_fact, article_359_fact, issues_fact]
+    verified_sections = [penalty_fact, article_359_fact, issues_fact, roles_fact, ruling_fact]
     non_empty = [s for s in verified_sections if s]
     if non_empty:
         user_content += (
@@ -328,6 +379,8 @@ def run_reduce(
     # We do this by calling the swarm with a custom system prompt that requests
     # a long output; the per-provider max_tokens will be respected by each Provider.
     # For providers that need higher token limits, operators should set REDUCE_MAX_TOKENS.
+    # Start with ApeKey (position 0) to avoid round-robin landing on a slow provider
+    swarm.reset_index()
     result = swarm.call(REDUCE_SYSTEM_PROMPT, user_content, retries=5, timeout=REDUCE_TIMEOUT)
 
     if result is None:

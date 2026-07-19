@@ -26,10 +26,17 @@ DATE_PATTERN: re.Pattern = re.compile(
     re.IGNORECASE
 )
 
-# Matches "LASTNAME, J." or "LASTNAME, C.J." style ponente lines
-# Captures the name portion before the comma
+# Matches "LASTNAME, J.:" or "LASTNAME, JR., J.:" style ponente lines.
+# Requires a leading newline so nav-bar words ("SECOND DIVISION", etc.) don't fire.
+# Group 1 captures the full display name including any JR./SR./III suffix.
+# Examples matched:
+#   TORRES, JR., J.:      → "TORRES, JR."
+#   PERLAS-BERNABE, J.:   → "PERLAS-BERNABE"
+#   DAVIDE, JR., C.J.:    → "DAVIDE, JR."
+#   LEONEN, J.            → "LEONEN"  (colon optional for older formatting)
 PONENTE_PATTERN: re.Pattern = re.compile(
-    r'([A-Z][A-Z\s\-]+),\s*(?:C\.)?J\.?\b'
+    r'\n([A-Z][A-Z\s\-\.]+?(?:,\s*(?:JR|SR|III|II|IV)\.?)?)\s*,\s*(?:C\.J\.|J\.)\s*:?',
+    re.IGNORECASE,
 )
 
 # Matches the "Petitioner vs. Respondent" block in case caption
@@ -43,6 +50,121 @@ VS_PATTERN: re.Pattern = re.compile(
 DIVISION_PATTERN: re.Pattern = re.compile(
     r'\b(EN BANC|FIRST DIVISION|SECOND DIVISION|THIRD DIVISION|SPECIAL FIRST DIVISION)\b',
     re.IGNORECASE
+)
+
+# ---------------------------------------------------------------------------
+# Role Inversion Patterns (Module 1 — used by p00_fetch.py)
+# ---------------------------------------------------------------------------
+
+# Matches compound roles: "accused-appellant", "defendant-petitioner"
+COMPOUND_ROLE_PATTERN: re.Pattern = re.compile(
+    r'(?:accused|defendant|plaintiff|offended\s+party)[\-–]\s*(?:appellant|petitioner|respondent)',
+    re.IGNORECASE,
+)
+
+# Matches appositive: "petitioner, who was the defendant below"
+APPOSITIVE_PATTERN: re.Pattern = re.compile(
+    r'(petitioner|respondent|appellant)[,;]\s*who\s+was\s+the\s+(accused|defendant|plaintiff)',
+    re.IGNORECASE,
+)
+
+# Detects "People of the Philippines" or "People" as the respondent side
+PEOPLE_PATTERN: re.Pattern = re.compile(
+    r'(?:People\s+of\s+(?:the\s+)?Philippines|The\s+People|People\s+of\s+the\s+Philippines)',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Multiple Parties Patterns (Module 2 — used by p00_fetch.py)
+# ---------------------------------------------------------------------------
+
+# Protects "Company, Inc." and "Corporation, Inc." from comma splitting
+CORP_COMMA_PATTERN: re.Pattern = re.compile(
+    r'(?:Company|Corporation|Corp|Assn|Association|Incorporated),\s*(?:Inc\.?|Ltd\.?|LLC|LLP)',
+    re.IGNORECASE,
+)
+
+# Strips noise: "HON.", "ET AL.", "JOINED BY", "IN CONSOLIDATION WITH", etc.
+NOISE_PATTERN: re.Pattern = re.compile(
+    r'\b(?:HON\.?|HONORABLE|ET\.?\s*AL\.?|ET\s+AL|JOINED\s+BY|IN\s+CONSOLIDATION\s+WITH)\b.*',
+    re.IGNORECASE,
+)
+
+# Strips role suffixes: "PETITIONERS", "RESPONDENTS" at end of name
+ROLE_SUFFIX_PATTERN: re.Pattern = re.compile(
+    r',\s*(?:PETITIONERS?|RESPONDENTS?|APPELLANTS?|APPELLEES?)\s*$',
+    re.IGNORECASE,
+)
+
+# Detects "et al." in caption
+ET_AL_PATTERN: re.Pattern = re.compile(
+    r'\bet\s+al\.?\b',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Consolidated GR Number Pattern (Module 3 — used by p00_fetch.py)
+# Anchored: requires "G.R." before each number, not just standalone digits.
+# ---------------------------------------------------------------------------
+CONSOLIDATED_GR_PATTERN: re.Pattern = re.compile(
+    r'G\.R\.?\s*(?:Nos?\.?)?\s*[\d][\d\-]+'
+    r'(?:\s*[,;]\s*(?:G\.R\.?\s*(?:Nos?\.?)?\s*)?[\d][\d\-]+)+',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Per Curiam Pattern (Module 4 — used by p00_fetch.py)
+# ---------------------------------------------------------------------------
+PER_CURIAM_PATTERN: re.Pattern = re.compile(
+    r'\bPER\s+CURIAM\b',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Ruling Nuance Patterns (Module 5 — used by p00_fetch.py)
+# ---------------------------------------------------------------------------
+
+# Matches ruling verbs
+RULING_VERB_PATTERN: re.Pattern = re.compile(
+    r'\b(AFFIRMED|REVERSED|MODIFIED|REMANDED|SET\s+ASIDE|DISMISSED|DENIED|SUSTAINED|OVERRULED|VACATED)\b',
+    re.IGNORECASE,
+)
+
+# Matches partial qualifiers inside the fallo block
+PARTIAL_QUALIFIER_PATTERN: re.Pattern = re.compile(
+    r'\b(in\s+part|as\s+to|with\s+modification|partially\s+(?:granted|affirmed|reversed)|except\s+(?:as\s+)?to)\b',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Legal Provision Patterns (Module 6 — used by p00_fetch.py)
+# ---------------------------------------------------------------------------
+
+# Matches "Article X of the Family Code", "Section 5, Rule 110", etc.
+PROVISION_LAW_PATTERN: re.Pattern = re.compile(
+    r'(Article|Section|Act|Rule|Title|Chapter|Paragraph|Subsection)\s+'
+    r'[A-Z0-9][A-Za-z0-9.\-]*(?:\s*[,;]\s*)?'
+    r'(?:\s+(?:of|,)\s+)?'
+    r'(?:the\s+)?'
+    r'(?:'
+    r'Rule\s+\d+'
+    r'|Republic\s+Act\s+No\.?\s+\d+'
+    r'|R\.?A\.?\s+No\.?\s+\d+'
+    r'|(?:Revised\s+)?Penal\s+Code'
+    r'|Family\s+Code'
+    r'|Civil\s+Code'
+    r'|Labor\s+Code'
+    r'|Local\s+Government\s+Code'
+    r'|Rules?\s+of\s+Court'
+    r'|Constitution(?:\s+of\s+\d{4})?'
+    r')',
+    re.IGNORECASE,
+)
+
+# Matches "Republic Act No. 9165", "RA 9165", "R.A. 9165"
+STATUTE_PATTERN: re.Pattern = re.compile(
+    r'(?:Republic\s+Act|R\.?A\.?)\s*(?:No?\.?\s*)?(\d+)',
+    re.IGNORECASE,
 )
 
 # Fallo extractor — finds the dispositive portion between opener and "SO ORDERED"

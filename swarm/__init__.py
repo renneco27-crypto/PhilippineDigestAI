@@ -64,7 +64,6 @@ def build_default_swarm() -> ProviderSwarm:
             model="meta/llama-3.3-70b-instruct",
             max_tokens=config.MAP_MAX_TOKENS,
             rpm_limit=20,
-            timeout=35,
         ),
         Provider(
             name="OpenRouter",
