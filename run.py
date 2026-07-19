@@ -278,6 +278,7 @@ def main() -> None:
             state["compiled_stream"],
             state["global_context"],
             swarm,
+            source_lines=state["lines"],
         )
         state["digest"] = digest
 

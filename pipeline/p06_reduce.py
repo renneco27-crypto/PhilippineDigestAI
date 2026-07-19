@@ -21,9 +21,11 @@ from models.types import GlobalContext
 from pipeline.p05_stitch import verify_usage_examples
 from swarm import ProviderSwarm
 from utils.text_utils import normalize_legal_terms
+from utils.regex_utils import ISSUE_PATTERNS
 from models.penalty_tables import classify_penalty_period, describe_period, get_article_359_facts
 from config import (
     INTERMEDIATE_STREAM_PATH,
+    INTERMEDIATE_LINES_PATH,
     INTERMEDIATE_CONTEXT_PATH,
     OUTPUT_DIGEST_PATH,
     REDUCE_MAX_TOKENS,
@@ -193,6 +195,40 @@ def _build_penalty_fact(ca_penalty: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Issue extraction from source
+# ---------------------------------------------------------------------------
+
+_ISSUE_WINDOW_START: int = 50
+_ISSUE_WINDOW_END: int = 200
+_ISSUE_MAX_ISSUES: int = 5
+
+
+def extract_stated_issues(source_lines: list[str]) -> str:
+    """Extract the Supreme Court's exact issue framing from source lines.
+
+    Only scans lines 50–200 where Philippine SC decisions typically state
+    the issues after reciting the facts. Returns formatted bullet points
+    for injection into the reduce prompt, or empty string if nothing found.
+    """
+    if not source_lines or len(source_lines) < _ISSUE_WINDOW_START:
+        return ""
+
+    window = "\n".join(source_lines[_ISSUE_WINDOW_START:_ISSUE_WINDOW_END])
+    findings: list[str] = []
+    for pattern in ISSUE_PATTERNS:
+        for m in pattern.finditer(window):
+            issue_text = m.group(1).strip()
+            if 20 < len(issue_text) < 600:
+                findings.append(f"- {issue_text}")
+
+    if not findings:
+        return ""
+
+    lines_found = findings[:_ISSUE_MAX_ISSUES]
+    return "\n".join(["VERIFIED ISSUES (exact text from the decision):"] + lines_found)
+
+
+# ---------------------------------------------------------------------------
 # Post-reduce deterministic corrections
 # ---------------------------------------------------------------------------
 
@@ -216,6 +252,7 @@ def apply_statute_corrections(digest: str) -> str:
 def build_reduce_user_content(
     compiled_stream: str,
     global_context: GlobalContext,
+    source_lines: list[str] | None = None,
 ) -> str:
     """
     Build the full user message for the Reduce AI call.
@@ -236,6 +273,9 @@ def build_reduce_user_content(
     if "article 359" in compiled_stream.lower() or "slander by deed" in compiled_stream.lower():
         article_359_fact = get_article_359_facts()
 
+    # Extract stated issues from source
+    issues_fact = extract_stated_issues(source_lines or [])
+
     user_content = (
         f"BAR FOCUS: {bar_subject}\n"
         f"Case: {petitioner} v. {respondent}\n"
@@ -248,15 +288,15 @@ def build_reduce_user_content(
         f"\n"
         f"--- END OF STREAM ---\n"
     )
-    if penalty_fact or article_359_fact:
+    verified_sections = [penalty_fact, article_359_fact, issues_fact]
+    non_empty = [s for s in verified_sections if s]
+    if non_empty:
         user_content += (
             f"\n"
             f"--- VERIFIED COMPUTED FACTS (use these exactly in ALAC) ---\n"
         )
-        if penalty_fact:
-            user_content += f"{penalty_fact}\n"
-        if article_359_fact:
-            user_content += f"{article_359_fact}\n"
+        for section in non_empty:
+            user_content += f"{section}\n"
         user_content += "--- END VERIFIED FACTS ---\n"
     user_content += (
         f"\n"
@@ -274,6 +314,7 @@ def run_reduce(
     compiled_stream: str,
     global_context: GlobalContext,
     swarm: ProviderSwarm,
+    source_lines: list[str] | None = None,
 ) -> str:
     """
     Execute the single Reduce AI call.
@@ -281,7 +322,7 @@ def run_reduce(
     Raises RuntimeError if the swarm exhausts all providers.
     Returns the raw Master Digest text.
     """
-    user_content = build_reduce_user_content(compiled_stream, global_context)
+    user_content = build_reduce_user_content(compiled_stream, global_context, source_lines)
 
     # Override max_tokens for the reduce call on every provider temporarily.
     # We do this by calling the swarm with a custom system prompt that requests
@@ -299,10 +340,10 @@ def run_reduce(
     result = apply_statute_corrections(result)
     result = normalize_legal_terms(result)
 
-    # Verify usage examples against source — log warnings, don't block
-    source_lines = global_context.get("_source_lines", [])
-    if source_lines:
-        flagged = verify_usage_examples(result, source_lines)
+    # Verify usage examples against source — auto-correct flagged examples
+    sl = source_lines or []
+    if sl:
+        flagged, result = verify_usage_examples(result, sl)
         for f in flagged:
             print(
                 f"[VERIFY] {f['status']} usage example "
@@ -318,6 +359,7 @@ def run_reduce(
 
 if __name__ == "__main__":
     import os
+    from pipeline.p00_fetch import load_lines
     from swarm import build_default_swarm
 
     print("Loading compiled stream…")
@@ -328,6 +370,9 @@ if __name__ == "__main__":
     with open(INTERMEDIATE_CONTEXT_PATH, encoding="utf-8") as fh:
         global_context: GlobalContext = json.load(fh)
 
+    print("Loading source lines…")
+    source_lines = load_lines(INTERMEDIATE_LINES_PATH)
+
     print("Building swarm…")
     swarm = build_default_swarm()
 
@@ -336,7 +381,7 @@ if __name__ == "__main__":
         provider.max_tokens = REDUCE_MAX_TOKENS
 
     print("Running Reduce stage…")
-    digest = run_reduce(compiled_stream, global_context, swarm)
+    digest = run_reduce(compiled_stream, global_context, swarm, source_lines=source_lines)
 
     os.makedirs("output", exist_ok=True)
     with open(OUTPUT_DIGEST_PATH, "w", encoding="utf-8") as fh:

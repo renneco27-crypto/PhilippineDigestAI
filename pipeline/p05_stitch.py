@@ -26,6 +26,7 @@ from config import (
 from models.constants import PIPELINE_METADATA_PATTERNS
 from models.types import ChunkDataPacket, GlobalContext
 from utils.regex_utils import SOURCE_LINES_START_PATTERN
+from models.legal_dictionary import CANONICAL_TERMS
 from utils.text_utils import filter_hard_words, normalize_legal_terms
 
 # Window size (in lines) used for the sliding verbatim check
@@ -134,6 +135,9 @@ def deduplicate_hard_words(packets: list[ChunkDataPacket]) -> list[str]:
             if key and key not in seen:
                 seen.add(key)
                 result.append(name)  # clean term name, no description
+    # Semantic dedup pass (name-only, threshold 0.70)
+    result = _semantic_deduplicate(result)
+
     return filter_hard_words(result)
 
 
@@ -176,6 +180,54 @@ def verify_hard_words_against_source(
         if name.lower() in source_text:
             result.append(term)
     return result
+
+
+def _semantic_deduplicate(terms: list[str], threshold: float = 0.75) -> list[str]:
+    """Remove semantically duplicate terms by name comparison.
+
+    Compares each term against every kept term using SequenceMatcher
+    on the normalized lowercase name. If ratio >= threshold the
+    shorter term is kept (preferring canonical legal forms).
+
+    This catches near-duplicates like 'indeterminate sentence'
+    vs 'Indeterminate Sentence Law' while keeping legally distinct
+    terms like 'reclusion perpetua' vs 'reclusion temporal'.
+    """
+    if len(terms) < 2:
+        return terms
+
+    # Build normalized versions for comparison
+    normed: list[str] = []
+    for t in terms:
+        n = normalize_legal_terms(t.lower()).rstrip(".,;:")
+        normed.append(n)
+
+    kept: list[bool] = [True] * len(terms)
+    canonical_keys = {k.lower() for k in CANONICAL_TERMS.values()}
+
+    for i in range(len(terms)):
+        if not kept[i]:
+            continue
+        for j in range(i + 1, len(terms)):
+            if not kept[j]:
+                continue
+            ratio = SequenceMatcher(None, normed[i], normed[j]).ratio()
+            if ratio < threshold:
+                continue
+            # Decide which to drop: prefer canonical, then shorter
+            i_canon = normed[i] in canonical_keys
+            j_canon = normed[j] in canonical_keys
+            if i_canon and not j_canon:
+                kept[j] = False
+            elif j_canon and not i_canon:
+                kept[i] = False
+            elif len(normed[j]) < len(normed[i]):
+                kept[i] = False
+            else:
+                kept[j] = False
+            break  # term i resolved against first close match
+
+    return [terms[i] for i in range(len(terms)) if kept[i]]
 
 
 def _term_name(raw: str) -> str:
@@ -288,13 +340,18 @@ def verify_usage_examples(
     digest: str,
     source_lines: list[str],
     threshold: float = 0.75,
-) -> list[dict]:
+) -> tuple[list[dict], str]:
     """Cross-reference usage examples in Section 2 against the source lines.
 
     Extracts every line starting with 'Example:' or 'Usage Example:' from
     the digest, then scores each against the source using SequenceMatcher.
-    Returns a list of dicts for examples below the confidence threshold:
-        {"example": str, "confidence": float, "status": "FABRICATED"|"LOW_CONFIDENCE"}
+    For flagged examples below the threshold, replaces the example text
+    with the best-matching verbatim source line (capped at 300 chars).
+
+    Returns (flagged_list, corrected_digest):
+        flagged: list of dicts with keys:
+            {"example": str, "confidence": float, "status": "FABRICATED"|"LOW_CONFIDENCE"}
+        corrected_digest: the digest with flagged examples replaced.
 
     Scores:
         >= threshold  → passes (not flagged)
@@ -302,43 +359,77 @@ def verify_usage_examples(
         < 0.4         → FABRICATED
     """
     example_pattern = re.compile(
-        r'(?:Usage\s+)?[Ee]xample:\s*["]?(.+?)["]?\s*$'
+        r'(?:\*\*)?(?:Usage\s+)?[Ee]xample:\s*(?:\*\*)?\s*["]?(.+?)["]?\s*(?:\*\*)?\s*$'
     )
-    source_text_lower = " ".join(source_lines).lower()
-    flagged = []
+
+    if not source_lines:
+        return [], digest
+
+    flagged: list[dict] = []
+    corrected_lines: list[str] = []
 
     for line in digest.splitlines():
         m = example_pattern.search(line)
         if not m:
+            corrected_lines.append(line)
             continue
+
         example_text = m.group(1).strip()
+        # Strip any remaining markdown bold markers
+        example_text = example_text.replace("**", "").strip()
         if not example_text or len(example_text) < 10:
+            corrected_lines.append(line)
             continue
 
         candidate = example_text[:200].lower()
         best_ratio = 0.0
+        best_window = ""
 
-        # Slide an 8-line window across source to find best match
+        # Slide an 8-line window across source to find best match.
+        # Compare against each individual line (for exact matches) and
+        # the concatenated window (for multi-line matches).
         for i in range(len(source_lines)):
-            window = " ".join(source_lines[i: i + _VERBATIM_SLIDE_WINDOW])[:200].lower()
+            window_lines = source_lines[i: i + _VERBATIM_SLIDE_WINDOW]
+            window = " ".join(window_lines)[:200].lower()
             try:
                 ratio = SequenceMatcher(None, candidate, window).ratio()
             except Exception:
                 continue
+            # Also check each individual line — catches exact matches
+            # that get diluted by concatenation
+            for sl in window_lines:
+                try:
+                    sl_score = SequenceMatcher(None, candidate, sl[:200].lower()).ratio()
+                    if sl_score > ratio:
+                        ratio = sl_score
+                except Exception:
+                    continue
             if ratio > best_ratio:
                 best_ratio = ratio
+                best_window = " ".join(window_lines)
             if best_ratio >= threshold:
                 break  # early exit — passes
 
-        if best_ratio < threshold:
-            status = "FABRICATED" if best_ratio < 0.4 else "LOW_CONFIDENCE"
-            flagged.append({
-                "example": example_text,
-                "confidence": round(best_ratio, 3),
-                "status": status,
-            })
+        if best_ratio >= threshold:
+            corrected_lines.append(line)
+            continue
 
-    return flagged
+        # Flagged — auto-correct with best-match source (capped at 300 chars)
+        status = "FABRICATED" if best_ratio < 0.4 else "LOW_CONFIDENCE"
+        flagged.append({
+            "example": example_text,
+            "confidence": round(best_ratio, 3),
+            "status": status,
+        })
+
+        # Reconstruct line keeping everything before group(1) +
+        # a space + verbatim + rest of line after full match
+        before_example = line[:m.start(1)]
+        after_match = line[m.end():]
+        verbatim = best_window[:300]
+        corrected_lines.append(f"{before_example.rstrip()} {verbatim}{after_match}")
+
+    return flagged, "\n".join(corrected_lines)
 
 
 # ── I/O helpers ───────────────────────────────────────────────────────────────

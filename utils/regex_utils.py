@@ -141,3 +141,43 @@ COMPILED_BOILERPLATE_PATTERNS: tuple[re.Pattern, ...] = tuple(_COMPILED_BOILERPL
 # Extracts the leading integer from "120–195" for sort_packets() in p05_stitch.py
 # ---------------------------------------------------------------------------
 SOURCE_LINES_START_PATTERN: re.Pattern = re.compile(r'^(\d+)')
+
+# ---------------------------------------------------------------------------
+# Issue Extraction Patterns (used by p06_reduce.py: extract_stated_issues)
+# Patterns match Philippine SC decision issue-framing language.
+# Each captures exactly one sentence (stops at ". The" / ". This" etc.)
+# ---------------------------------------------------------------------------
+ISSUE_PATTERNS: tuple[re.Pattern, ...] = (
+    # "The issue in this case is whether X is Y"
+    re.compile(
+        r'(?:the\s+)?(?:issue|question)\s+(?:in\s+this\s+case\s+)?'
+        r'(?:for\s+(?:resolution|consideration|determination)\s+)?'
+        r'(?:is|are|raised|presented|assigned)\s*[:;]?\s*'
+        r'(.+?)'
+        r'(?:\.\s+(?:The|We|This|Petitioner|Respondent|Thus|However|In|It)|$)',
+        re.IGNORECASE | re.DOTALL
+    ),
+    # "Petitioner assigns the following errors: ..."
+    re.compile(
+        r'(?:assign(?:ed|s)?\s+(?:the\s+)?(?:following\s+)?error[s]?\s*[:;]?\s*)'
+        r'(.+?)'
+        r'(?:\.\s+(?:The|We|This|Petitioner|Respondent|Thus|However|In|It)|$)',
+        re.IGNORECASE | re.DOTALL
+    ),
+    # "WHETHER OR NOT X IS Y"
+    re.compile(
+        r'(?:whether\s+or\s+not\s+)'
+        r'(.+?)'
+        r'(?:\?|\.\s+(?:The|We|This))',
+        re.IGNORECASE | re.DOTALL
+    ),
+    # "The sole/controlling question for resolution is ..."
+    re.compile(
+        r'(?:the\s+)?(?:sole|main|central|principal|pivotal|controlling)\s+'
+        r'(?:issue|question)\s+'
+        r'(?:is|involves|concerns|relates\s+to|presented\s+is)\s+'
+        r'(.+?)'
+        r'(?:\.\s+(?:The|We|This|Thus|However|In|It)|$)',
+        re.IGNORECASE | re.DOTALL
+    ),
+)
