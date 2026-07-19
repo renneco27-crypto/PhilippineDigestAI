@@ -54,9 +54,14 @@ MAP_SYSTEM_PROMPT: str = (
 def build_user_content(payload: ChunkPayload) -> str:
     """
     Build the user message string from a ChunkPayload.
-    Format: context_header + separator + chunk_text.
+    Format: XML directive + context_header + separator + chunk_text.
     """
-    return payload["context_header"] + "\n\n---\n" + payload["chunk_text"]
+    return (
+        "Respond ONLY with a <ChunkData> XML block. No preamble, no explanation.\n\n"
+        + payload["context_header"]
+        + "\n\n---\n"
+        + payload["chunk_text"]
+    )
 
 
 # ---------------------------------------------------------------------------

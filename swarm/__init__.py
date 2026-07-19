@@ -22,7 +22,7 @@ def build_default_swarm() -> ProviderSwarm:
     providers = [
         ApeKeyProvider(
             name="ApeKey",
-            api_url="https://apekey.ai/v1",
+            api_url="https://apekey.ai/v1/chat/completions",
             api_key=config.APEKEY_API_KEY,
             model="auto",
             max_tokens=config.MAP_MAX_TOKENS,

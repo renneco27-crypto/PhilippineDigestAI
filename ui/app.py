@@ -489,7 +489,7 @@ def _build_swarm():
         ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions",                            config.OPENROUTER_API_KEY, "openai/gpt-oss-20b:free",        20),
     ]
     providers = [
-        ApeKeyProvider(name="ApeKey", api_url="https://apekey.ai/v1",
+        ApeKeyProvider(name="ApeKey", api_url="https://apekey.ai/v1/chat/completions",
                        api_key=config.APEKEY_API_KEY, model="auto",
                        max_tokens=config.MAP_MAX_TOKENS, rpm_limit=30,
                        timeout=5, prefer="speed"),
