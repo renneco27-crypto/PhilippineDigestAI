@@ -1,0 +1,11 @@
+requests
+beautifulsoup4
+pyahocorasick
+pdfplumber
+pymupdf
+difflib
+python-dotenv
+streamlit
+pypdf2
+python-docx
+mistune
