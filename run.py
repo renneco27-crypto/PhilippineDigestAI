@@ -141,7 +141,7 @@ def main() -> None:
         lines=[],
         global_context=GlobalContext(
             petitioner="", respondent="", petitioner_short="",
-            respondent_short="", complainant="", gr_number="",
+            respondent_short="", complainant="", ca_penalty="", gr_number="",
             promulgation_date="", ponente="", division="",
             sc_fallo="",
             source_url=args.source if not args.pdf else "",

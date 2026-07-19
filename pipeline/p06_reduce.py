@@ -14,10 +14,12 @@ Key rules:
 from __future__ import annotations
 
 import json
+import re
 
 from models.types import GlobalContext
 from swarm import ProviderSwarm
 from utils.text_utils import normalize_legal_terms
+from models.penalty_tables import classify_penalty_period, describe_period
 from config import (
     INTERMEDIATE_STREAM_PATH,
     INTERMEDIATE_CONTEXT_PATH,
@@ -135,6 +137,60 @@ REDUCE_FORMAT: str = (
 
 
 # ---------------------------------------------------------------------------
+# Penalty fact extraction
+# ---------------------------------------------------------------------------
+
+_PENALTY_NAMES = [
+    "prision correccional", "arresto mayor", "prision mayor",
+    "reclusion temporal", "reclusion perpetua",
+]
+
+
+def _build_penalty_fact(ca_penalty: str) -> str:
+    """Parse raw CA penalty text and return a verified penalty fact string.
+    Returns empty string if the penalty text cannot be parsed."""
+    if not ca_penalty:
+        return ""
+    text = ca_penalty.lower()
+
+    # Find which RPC penalty is mentioned
+    found_name = ""
+    for name in _PENALTY_NAMES:
+        if name in text:
+            found_name = name
+            break
+    if not found_name:
+        return ""
+
+    # Extract the maximum duration near the penalty name
+    # Pattern: "to [word] ([number]) years and [word] ([number]) months of [penalty]"
+    dur_pat = re.compile(
+        r"(?:as\s+(?:a\s+)?maximum|,?\s+to)\s+"
+        r"(?:\w+\s*\((\d+)\)\s+years?\s+and\s+)?"
+        r"(\w+)\s*\((\d+)\)\s+months?\s+"
+        r"of\s+" + re.escape(found_name),
+        re.IGNORECASE,
+    )
+    dur_m = dur_pat.search(ca_penalty)
+    if not dur_m:
+        return ""
+
+    years = int(dur_m.group(1)) if dur_m.group(1) else 0
+    months = int(dur_m.group(3))
+
+    period = classify_penalty_period(found_name, years, months, days=0)
+    medium_desc = describe_period(found_name, "medium")
+
+    return (
+        f"VERIFIED PENALTY FACT: The lower court imposed {years} year{'s' if years != 1 else ''}"
+        f" and {months} month{'s' if months != 1 else ''} of {found_name}. "
+        f"This falls in the {period} period of {found_name}"
+        f" (the medium period is {medium_desc}). "
+        f"Use this fact directly in Section 5 (The Ruling) and Section 6 (ALAC)."
+    )
+
+
+# ---------------------------------------------------------------------------
 # build_reduce_user_content
 # ---------------------------------------------------------------------------
 
@@ -154,6 +210,8 @@ def build_reduce_user_content(
     promulgation_date = global_context["promulgation_date"]
     division = global_context["division"]
 
+    penalty_fact = _build_penalty_fact(global_context.get("ca_penalty", ""))
+
     user_content = (
         f"BAR FOCUS: {bar_subject}\n"
         f"Case: {petitioner} v. {respondent}\n"
@@ -165,6 +223,15 @@ def build_reduce_user_content(
         f"{compiled_stream}\n"
         f"\n"
         f"--- END OF STREAM ---\n"
+    )
+    if penalty_fact:
+        user_content += (
+            f"\n"
+            f"--- VERIFIED COMPUTED FACTS (use these exactly in ALAC) ---\n"
+            f"{penalty_fact}\n"
+            f"--- END VERIFIED FACTS ---\n"
+        )
+    user_content += (
         f"\n"
         f"Now generate the complete Master Case Digest using this exact format:\n"
         f"{REDUCE_FORMAT}"

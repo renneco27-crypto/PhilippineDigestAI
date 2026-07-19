@@ -21,6 +21,8 @@ class GlobalContext(TypedDict):
     complainant: str           # Private complainant name extracted from Facts body
                                # (distinct from respondent in caption; empty if not a
                                #  criminal case or if none found)
+    ca_penalty: str            # Raw CA penalty text extracted from case body
+                               # (empty if not found or not a criminal case)
 
 
 class KeywordHit(TypedDict):

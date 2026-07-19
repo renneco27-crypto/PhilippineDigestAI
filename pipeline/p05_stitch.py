@@ -248,7 +248,18 @@ def build_compiled_stream(
         lines_out.append(f"  Commentary:       {packet.get('Commentary', 'NOT_PRESENT')}")
         lines_out.append("")  # blank line between chunks
 
-    return "\n".join(lines_out)
+    result = "\n".join(lines_out)
+    return strip_context_headers(result)
+
+
+def strip_context_headers(stream: str) -> str:
+    """Remove pipeline metadata lines from the compiled stream before
+    passing to the reduce stage. These lines begin with 'This chunk
+    occurs when' and are never part of the case text."""
+    return "\n".join(
+        line for line in stream.splitlines()
+        if not line.strip().startswith("This chunk occurs when")
+    )
 
 
 # ── I/O helpers ───────────────────────────────────────────────────────────────

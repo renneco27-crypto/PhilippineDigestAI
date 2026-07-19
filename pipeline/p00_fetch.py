@@ -104,6 +104,7 @@ def extract_global_context_from_html(soup: BeautifulSoup, url: str) -> GlobalCon
         "source_url": url,
         "bar_subject": "",  # Set by caller (run.py or __main__ block)
         "complainant": "",  # Extracted below from body text; empty if not found
+        "ca_penalty": "",   # Extracted below from body text; empty if not found
     }
 
     # GR number from URL path (most reliable — Lawphil URLs contain the GR)
@@ -159,6 +160,18 @@ def extract_global_context_from_html(soup: BeautifulSoup, url: str) -> GlobalCon
         name = (complainant_match.group(1) or complainant_match.group(2) or "").strip()
         context["complainant"] = name
 
+    # CA penalty — look for CA-imposed penalty phrase in the body text
+    ca_penalty_pattern = re.compile(
+        r"(?:Court of Appeals|CA)\s+(?:imposed|affirmed|modified).*?"
+        r"(?:penalty|sentence).{0,80}?"
+        r"(?:\d+\s+years?[^.]*|arresto mayor|prision correccional"
+        r"|prision mayor|reclusion temporal|reclusion perpetua)[^.]*\.",
+        re.IGNORECASE | re.DOTALL,
+    )
+    ca_match = ca_penalty_pattern.search(full_text)
+    if ca_match:
+        context["ca_penalty"] = ca_match.group(0).strip()
+
     return context
 
 
@@ -181,6 +194,7 @@ def extract_global_context_from_lines(lines: list[str]) -> GlobalContext:
         "source_url": "",
         "bar_subject": "",
         "complainant": "",  # Extracted below from body text; empty if not found
+        "ca_penalty": "",   # Extracted below from body text; empty if not found
     }
 
     header_text = "\n".join(lines[:50])
@@ -236,6 +250,18 @@ def extract_global_context_from_lines(lines: list[str]) -> GlobalContext:
     if complainant_match:
         name = (complainant_match.group(1) or complainant_match.group(2) or "").strip()
         context["complainant"] = name
+
+    # CA penalty — same pattern as the HTML path
+    ca_penalty_pattern = re.compile(
+        r"(?:Court of Appeals|CA)\s+(?:imposed|affirmed|modified).*?"
+        r"(?:penalty|sentence).{0,80}?"
+        r"(?:\d+\s+years?[^.]*|arresto mayor|prision correccional"
+        r"|prision mayor|reclusion temporal|reclusion perpetua)[^.]*\.",
+        re.IGNORECASE | re.DOTALL,
+    )
+    ca_match = ca_penalty_pattern.search(full_text)
+    if ca_match:
+        context["ca_penalty"] = ca_match.group(0).strip()
 
     return context
 
